@@ -21,6 +21,7 @@ async function captureNow() {
         `[ContextBridge] saved ${saved.order.length} messages (${captured.length} visible on screen)`
       );
       cbEvents.dispatchEvent(new Event("saved"));
+      scheduleLocalBrief(); // update the background brief once the page goes quiet
     }
   } catch (err) {
     console.error("[ContextBridge] capture failed:", err);

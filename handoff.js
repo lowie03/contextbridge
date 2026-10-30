@@ -24,11 +24,44 @@ function realMessages(conversation, ids) {
     .filter(Boolean);
 }
 
-// Messages that come after the brief in the conversation.
-function messagesSinceBrief(conversation) {
-  const index = conversation.order.indexOf(conversation.brief.messageId);
-  if (index === -1) return [];
-  return realMessages(conversation, conversation.order.slice(index + 1));
+// The brief that covers the most of the conversation: from your computer or from ChatGPT.
+// Each brief remembers exactly which messages it includes (coveredIds).
+function currentBrief(conversation) {
+  const options = [];
+
+  if (conversation.brief?.coveredIds) {
+    options.push({
+      source: "chatgpt",
+      text: conversation.brief.text,
+      createdAt: conversation.brief.createdAt,
+      covered: new Set(conversation.brief.coveredIds),
+    });
+  }
+  if (conversation.localBrief?.coveredIds) {
+    options.push({
+      source: "local",
+      text: conversation.localBrief.text,
+      createdAt: conversation.localBrief.updatedAt,
+      covered: new Set(conversation.localBrief.coveredIds),
+    });
+  }
+  if (options.length === 0) return null;
+
+  // Count how many of today's real messages each brief includes.
+  const realIds = realMessages(conversation, conversation.order).map((m) => m.id);
+  for (const option of options) {
+    option.coverage = realIds.filter((id) => option.covered.has(id)).length;
+  }
+
+  // Most coverage wins; on a tie, prefer ChatGPT's (it saw the full conversation).
+  options.sort((a, b) => b.coverage - a.coverage || (a.source === "chatgpt" ? -1 : 1));
+  return options[0];
+}
+
+// Real messages the brief doesn't include yet, in conversation order.
+function pendingMessages(conversation, brief) {
+  const all = realMessages(conversation, conversation.order);
+  return brief ? all.filter((m) => !brief.covered.has(m.id)) : all;
 }
 
 // Format messages as a transcript, keeping the newest ones if it gets too long.
@@ -58,31 +91,32 @@ function formatTranscript(messages, maxChars) {
 // Returns { text, summary }: the handoff itself, and a short description for the panel.
 function buildHandoff(conversation) {
   const intro = `I'm continuing a project I was working on with another AI assistant (${conversation.provider}), which hit its usage limit.`;
+  const brief = currentBrief(conversation);
 
   // Case 1 and 2: there is a brief.
-  if (conversation.brief) {
-    const briefBlock = `--- HANDOFF BRIEF ---\n${conversation.brief.text}\n--- END OF BRIEF ---`;
-    const since = messagesSinceBrief(conversation);
+  if (brief) {
+    const briefBlock = `--- HANDOFF BRIEF ---\n${brief.text}\n--- END OF BRIEF ---`;
+    const pending = pendingMessages(conversation, brief);
 
-    if (since.length === 0) {
+    if (pending.length === 0) {
       return {
         text: `${intro} Below is a brief of the work so far.\n\n${CONTINUE_INSTRUCTIONS}\n\n${briefBlock}`,
         summary: "the brief (it's up to date).",
       };
     }
 
-    const recent = formatTranscript(since, HANDOFF_MAX_CHARS);
+    const recent = formatTranscript(pending, HANDOFF_MAX_CHARS);
     return {
-      text: `${intro} Below is a brief of the work, followed by the messages we exchanged after the brief was written. The later messages are newer: where they disagree with the brief, they win.
+      text: `${intro} Below is a brief of the work, followed by messages the brief doesn't include yet. Those messages are newer: where they disagree with the brief, they win.
 
 ${CONTINUE_INSTRUCTIONS}
 
 ${briefBlock}
 
---- MESSAGES SINCE THE BRIEF (${since.length}) ---
+--- MESSAGES NOT IN THE BRIEF YET (${pending.length}) ---
 ${recent}
 --- END OF MESSAGES ---`,
-      summary: `the brief + ${pluralize(since.length, "newer message")}.`,
+      summary: `the brief + ${pluralize(pending.length, "newer message")}.`,
     };
   }
 

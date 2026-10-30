@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
   "name": "ContextBridge",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Carry your AI chat work over to another chatbot.",
   "permissions": ["storage"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["https://chatgpt.com/*"],
@@ -13,6 +16,7 @@
         "storage.js",
         "brief.js",
         "handoff.js",
+        "localbrief.js",
         "panel.js",
         "content.js"
       ],

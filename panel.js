@@ -132,7 +132,7 @@
         right: calc(100% + 10px);
         top: 50%;
         transform: translateY(-50%);
-        width: 360px;
+        width: 380px;
         max-width: calc(100vw - 70px);
         max-height: 80vh;
         overflow-y: auto;
@@ -166,7 +166,7 @@
         margin: 0 0 10px;
       }
       .preview[hidden] { display: none; }
-      .actions { display: flex; gap: 8px; justify-content: flex-end; }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
       .setting {
         display: flex;
         gap: 8px;
@@ -202,12 +202,13 @@
       <p class="status"></p>
       <pre class="preview" hidden></pre>
       <div class="actions">
-        <button class="prepare">Prepare handoff</button>
+        <button class="update">Update now</button>
+        <button class="ask" title="ChatGPT writes a detailed brief. Uses one message.">Ask ChatGPT</button>
         <button class="copy primary" hidden>Copy handoff</button>
       </div>
       <label class="setting">
         <input type="checkbox" class="auto-brief" />
-        <span>Write a brief automatically when ChatGPT warns about a limit. Uses one message.</span>
+        <span>Ask ChatGPT for a brief automatically when it warns about a limit. Uses one message.</span>
       </label>
     </div>
   `;
@@ -220,14 +221,16 @@
   const alertEl = $(".alert");
   const statusEl = $(".status");
   const preview = $(".preview");
-  const prepareBtn = $(".prepare");
+  const updateBtn = $(".update");
+  const askBtn = $(".ask");
   const copyBtn = $(".copy");
   const autoBriefBox = $(".auto-brief");
 
-  let working = false; // true while ChatGPT is writing a brief
+  let working = false;        // true while ChatGPT is writing a brief
+  let localUpdating = false;  // true while the background brief is updating
   let currentHandoff = "";
-  let autoOpenedFor = ""; // so the panel only pops open once per limit
-  let autoBriefedFor = ""; // so each warning triggers at most one automatic brief
+  let autoOpenedFor = "";     // so the panel only pops open once per limit
+  let autoBriefedFor = "";    // so each warning triggers at most one automatic brief
 
   // ---------- Helpers ----------
   function setStatus(text) {
@@ -244,6 +247,10 @@
 
   function plural(n, word) {
     return `${n} ${word}${n === 1 ? "" : "s"}`;
+  }
+
+  function sourceLabel(brief) {
+    return brief.source === "local" ? "on your computer" : "by ChatGPT";
   }
 
   async function copyText(text) {
@@ -271,20 +278,17 @@
 
     const count = conversation?.order.length || 0;
     const limit = conversation?.limit || null;
-    if (!conversation?.brief) return { kind: "saving", conversationId, conversation, count, limit };
+    const brief = conversation ? currentBrief(conversation) : null;
 
-    // How many real messages come after the brief in the conversation?
-    const briefIndex = conversation.order.indexOf(conversation.brief.messageId);
-    const newSince =
-      briefIndex === -1
-        ? 0
-        : conversation.order.slice(briefIndex + 1).filter((id) => !isInternalMessage(conversation, id)).length;
+    if (!brief) return { kind: "saving", conversationId, conversation, count, limit, brief: null };
 
+    const newSince = pendingMessages(conversation, brief).length;
     return {
       kind: newSince > 0 ? "stale" : "ready",
       conversationId,
       conversation,
       count,
+      brief,
       newSince,
       needsRefresh: newSince >= DRAIN_AFTER,
       limit,
@@ -310,7 +314,7 @@
     switch (limit.kind) {
       case "chat-full":   return "This chat is full · copy your handoff";
       case "usage-limit": return "Limit reached · copy your handoff";
-      case "warning":     return "Limit close · refresh your brief now";
+      case "warning":     return "Limit close · your handoff is ready";
     }
   }
 
@@ -319,21 +323,22 @@
       case "chat-full":
         return "ChatGPT says this chat is full, so it can't continue here. Copy the handoff and paste it into your next AI.";
       case "usage-limit":
-        return "ChatGPT's usage limit is reached, so it can't write a new brief right now. Your handoff is still ready to copy.";
+        return "ChatGPT's usage limit is reached. Your handoff is ready to copy.";
       case "warning":
-        return "ChatGPT warned that you're close to a limit. Refresh the brief now, while it can still reply.";
+        return "ChatGPT warned that you're close to a limit. Your handoff is ready to copy whenever you need it.";
     }
   }
 
   function tabText(state) {
-    if (working) return "Writing brief…";
+    if (working) return "ChatGPT is writing a brief…";
     if (state.limit) return limitTabText(state.limit);
+    if (localUpdating && state.kind !== "idle") return "Updating brief…";
     switch (state.kind) {
       case "idle":   return "ContextBridge · open a chat";
       case "saving": return `${plural(state.count, "message")} saved · no brief yet`;
-      case "ready":  return `Brief ready · ${timeAgo(state.conversation.brief.createdAt)}`;
+      case "ready":  return "Brief ready · up to date";
       case "stale":  return state.needsRefresh
-        ? "Brief is out of date · refresh recommended"
+        ? "Brief is out of date · update recommended"
         : `Brief is ${plural(state.newSince, "message")} behind`;
     }
   }
@@ -343,14 +348,17 @@
       case "idle":
         return "Open a conversation to prepare a handoff.";
       case "saving":
-        return `${plural(state.count, "message")} saved. No brief yet. Preparing one uses one ChatGPT message.`;
+        return `${plural(state.count, "message")} saved. No brief yet: ContextBridge writes one on your computer shortly after ChatGPT replies.`;
       case "ready":
-        return `Brief ready · written ${timeAgo(state.conversation.brief.createdAt)}.`;
+        return `Brief ready · covers every message so far. Written ${timeAgo(state.brief.createdAt)} ${sourceLabel(state.brief)}; it updates by itself when new messages arrive.`;
       case "stale":
-        return state.needsRefresh
-          ? `Brief written ${timeAgo(state.conversation.brief.createdAt)}, with ${plural(state.newSince, "new message")} since. It's out of date: refresh it before you hand off.`
-          : `Brief written ${timeAgo(state.conversation.brief.createdAt)}, with ${plural(state.newSince, "new message")} since. Refresh it to include them.`;
+        return `Brief updated ${timeAgo(state.brief.createdAt)} ${sourceLabel(state.brief)}, with ${plural(state.newSince, "new message")} since. It updates on its own shortly, or click Update now.`;
     }
+  }
+
+  function problemText() {
+    if (!localBriefProblem) return "";
+    return ` Background briefs aren't working on this computer right now (${localBriefProblem}), but Copy still includes every message.`;
   }
 
   // ---------- Draw the state on screen ----------
@@ -388,13 +396,15 @@
     currentHandoff = handoff.text;
     copyBtn.hidden = working || !handoff.text;
 
-    // The panel
-    const brief = state.conversation?.brief;
-    prepareBtn.disabled = working || state.kind === "idle" || isBlocked(state.limit);
-    prepareBtn.textContent = brief ? "Refresh brief" : "Prepare handoff";
+    // The buttons
+    const hasPending = state.kind === "stale" || (state.kind === "saving" && state.count > 0);
+    updateBtn.disabled = working || localUpdating || !hasPending;
+    updateBtn.textContent = localUpdating ? "Updating…" : "Update now";
+    askBtn.disabled = working || state.kind === "idle" || isBlocked(state.limit);
 
-    if (brief) {
-      preview.textContent = brief.text;
+    // The brief preview
+    if (state.brief) {
+      preview.textContent = state.brief.text;
       preview.hidden = false;
     } else {
       preview.hidden = true;
@@ -402,14 +412,15 @@
 
     if (!working) {
       const includes = handoff.text ? ` Copy includes ${handoff.summary}` : "";
-      setStatus(panelText(state) + includes);
+      setStatus(panelText(state) + includes + problemText());
     }
   }
 
   async function refresh() {
     if (!extensionAlive()) {
       setStatus("ContextBridge was updated. Refresh this page to reconnect.");
-      prepareBtn.disabled = true;
+      updateBtn.disabled = true;
+      askBtn.disabled = true;
       copyBtn.hidden = true;
       return;
     }
@@ -422,14 +433,14 @@
     }
   }
 
-  // ---------- Writing a brief ----------
+  // ---------- Asking ChatGPT for a brief ----------
   async function runBrief(automatic) {
     working = true;
     await refresh();
     setStatus(
       automatic
-        ? "ChatGPT warned about a limit, so ContextBridge is writing a brief now..."
-        : "Asking ChatGPT for a handoff brief... This can take a minute."
+        ? "ChatGPT warned about a limit, so ContextBridge is asking it for a brief now..."
+        : "Asking ChatGPT for a detailed brief... This can take a minute."
     );
 
     let error = null;
@@ -443,15 +454,15 @@
     await refresh(); // always redraw from what's actually saved
 
     if (error) {
-      setStatus(`Couldn't prepare a new brief: ${error.message}`);
+      setStatus(`Couldn't get a brief from ChatGPT: ${error.message}`);
     } else if (automatic) {
-      setStatus("Brief refreshed automatically before the limit. Copy it whenever you need it.");
+      setStatus("ChatGPT wrote a brief before the limit. Copy it whenever you need it.");
     } else {
-      setStatus("Brief ready. Copy it and paste it into your next AI.");
+      setStatus("ChatGPT's brief is ready. Copy it and paste it into your next AI.");
     }
   }
 
-  // Write a brief by itself when ChatGPT warns about a limit, if the user turned that on.
+  // Ask ChatGPT for a brief by itself when it warns about a limit, if the user turned that on.
   async function maybeAutoBrief(state) {
     if (!state || working || state.limit?.kind !== "warning") return;
 
@@ -467,7 +478,7 @@
 
     if (chatgptAdapter.composerHasText()) {
       setStatus(
-        "ChatGPT warned about a limit, but your message box has a draft, so ContextBridge didn't write a brief. Send or clear it, then click Refresh brief."
+        "ChatGPT warned about a limit, but your message box has a draft, so ContextBridge didn't ask it for a brief. Send or clear it, then click Ask ChatGPT."
       );
       return;
     }
@@ -489,7 +500,9 @@
     if (event.key === "Escape") panel.hidden = true;
   });
 
-  prepareBtn.addEventListener("click", () => runBrief(false));
+  updateBtn.addEventListener("click", () => updateLocalBrief());
+
+  askBtn.addEventListener("click", () => runBrief(false));
 
   copyBtn.addEventListener("click", async () => {
     await copyText(currentHandoff);
@@ -511,6 +524,16 @@
   });
 
   cbEvents.addEventListener("limit", () => {
+    if (!working) refresh();
+  });
+
+  cbEvents.addEventListener("local-brief-start", () => {
+    localUpdating = true;
+    if (!working) refresh();
+  });
+
+  cbEvents.addEventListener("local-brief-end", () => {
+    localUpdating = false;
     if (!working) refresh();
   });
 

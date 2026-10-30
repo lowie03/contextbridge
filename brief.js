@@ -78,7 +78,12 @@ async function requestBrief() {
 
   await cbStorage.update(conversationId, (stored) => {
     stored = stored || cbStorage.blank(conversationId, adapter.name);
-    stored.brief = { text: briefText, messageId: reply.id, createdAt: Date.now() };
+    stored.brief = {
+      text: briefText,
+      messageId: reply.id,
+      createdAt: Date.now(),
+      coveredIds: realMessages(stored, stored.order).map((m) => m.id), // everything ChatGPT could see
+    };
 
     // Remember ContextBridge's own messages so the handoff can leave them out later.
     const internal = new Set(stored.internalIds || []);
