@@ -4,8 +4,6 @@
 
 ContextBridge is a Chrome extension for ChatGPT. While you chat, it keeps a running brief of your work on your own computer. When ChatGPT says the chat is full or you've hit a limit, it hands you a ready-to-paste handoff, so another AI (Claude, Gemini, or a new ChatGPT chat) can pick up exactly where you stopped, without you explaining everything again.
 
-![ContextBridge demo](docs/demo.gif)
-
 ## The problem
 
 You spend an hour with an AI building something: explaining requirements, making decisions, fixing bugs. Then the chat hits its limit. The next AI knows nothing, and you have to reconstruct the whole project from memory.
@@ -63,13 +61,3 @@ ContextBridge isn't on the Chrome Web Store yet. To try it:
 
 Built with Manifest V3, content scripts, Shadow DOM, a service worker, `chrome.storage` and the Prompt API.
 
-## Roadmap
-
-- [ ] Claude support
-- [ ] Gemini support
-- [ ] Early warning before a chat fills up
-- [ ] Chrome Web Store release
-
-## Feedback
-
-Ideas, bugs and questions are welcome: open an issue.
